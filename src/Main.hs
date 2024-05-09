@@ -29,6 +29,7 @@ fzf_command = "fzf"
 
 fzf_args :: [String]
 fzf_args = ["--height", "90%"]
+
 ------------------------------------
 -- IO
 
@@ -99,8 +100,6 @@ pJust p = do
   x <- p
   pure (Just x)
 
--- match on text of alternating A's and B's, of any parity
--- Like sepBy, but it slurps input left to right rather (unlike `sepBy` (char ','), which also sl)
 pList' :: Parser a -> Parser [Maybe a]
 pList' p = do
   mHead <- choice [pJust p, pNothing skipSpace]
@@ -111,16 +110,11 @@ pList' p = do
     Just xs -> mHead : xs
   pure mxs
 
--- parser for a comma-separated list of a's, which does *not* use
--- sepBy, as that captures commas inside our a chunks, which is bad.
--- chunks consisting only of whitespace are ignored in the output list
 pList :: Parser a -> Parser [a]
 pList p = do
   mxs <- pList' p
-  -- mxs <- many (pMaybe p <* skipSpace <* char ',')
   return $ catMaybes mxs
 
--- the stuff inside the curly brackets
 pBibEntryData :: Parser BibEntry
 pBibEntryData = do
   fId <- takeTill (isSpaceOrChar ',')
@@ -175,7 +169,6 @@ parseExact p txt = case parseOnly (p <* skipSpace <* endOfInput) txt of
     Right bs -> pure bs
 
 
-
 main :: IO ()
 main = do
   rawtxt <- tryReadBib
@@ -189,8 +182,15 @@ main = do
                                                 , delegate_ctlc = True }
 
   hSetBuffering hIn NoBuffering
-  mapM (hPutStrLn hIn) input_lines
+
+-- if a significant delay becomes noticeable
+-- at startup before the list becomes populated, and the bibfile also 
+-- happens to be large, then it may be because of mapM loading the whole
+-- bib into memory before processing it. At that point, a streaming approach 
+-- using the pipes library would be better.
+  mapM (hPutStrLn hIn) input_lines 
   waitForProcess ph
+
   output <- hGetLine hOut
   hClose hOut
   hClose hIn

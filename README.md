@@ -22,7 +22,7 @@ Your bibtex file will contain a number of entries that look like this:
 }
 ```
 
-Currently, only 3 fields matter for us: the identifier (`hottbootk` in the above), the title, and the author.
+Currently, only 3 fields matter for us: the identifier (`hottbook` in the above), the title, and the author.
 More may be added in future if I find myself wanting more data filter on.
 
 The identifier in particular is key - **it tells you what your pdf files must be named**.
