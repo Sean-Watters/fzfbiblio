@@ -8,6 +8,10 @@ import Data.Maybe
 import Data.Char
 import Data.Attoparsec.Text
 import System.Environment
+import System.Process
+import System.IO
+import System.IO.Error
+import GHC.IO.Handle
 import Debug.Trace
 
 ------------------------------------
@@ -18,10 +22,6 @@ evBibLoc = "FZFBIBLIO_BIB_FILE"
 
 evPdfLoc :: String
 evPdfLoc = "FZFBIBLIO_PDF_FOLDER"
-
-test :: T.Text
-test = "@InProceedings{dybjersetzer99,\n  author    = {Dybjer, Peter and Setzer, Anton},\n  title     = {A Finite Axiomatization of Inductive-Recursive Definitions},\n  editor    = {Girard, Jean-Yves},\n  booktitle = {Typed Lambda Calculi and Applications},\n  year      = {1999},\n  publisher = {Springer},\n  pages     = {129--146},\n}\n"
-
 
 ------------------------------------
 -- IO
@@ -38,6 +38,9 @@ tryReadBib = do
 
 data BibEntry = MkBibEntry {id :: T.Text, author :: T.Text, title :: T.Text}
   deriving (Eq, Ord, Show)
+
+prettyPrint :: BibEntry -> String
+prettyPrint (MkBibEntry fId fAuthor fTitle) = T.unpack fTitle ++ " • " ++ T.unpack fAuthor ++ " • (" ++ T.unpack fId ++ ")"
 
 ------------------------------------
 -- Parsing
@@ -138,17 +141,58 @@ pBibEntry = do
 pBib :: Parser [BibEntry]
 pBib = many pBibEntry
 
+pLast :: Parser T.Text
+pLast = do
+  char '('
+  x <- takeTill (== ')')
+  char ')'
+  endOfInput
+  return x
+
+pOut :: Parser T.Text
+pOut = do
+  skipWhile (/= '(')
+  x <- choice [pLast, pOut]
+  return x
+
+
 ------------------------------------
 -- Main
 
-parseExact :: Parser a -> T.Text -> Either String a
-parseExact p = parseOnly (p <* skipSpace <* endOfInput)
+parseExact :: Parser a -> T.Text -> IO a
+parseExact p txt = case parseOnly (p <* skipSpace <* endOfInput) txt of
+    Left err -> ioError $ userError $ "Parse error: " ++ err
+    Right bs -> pure bs
+
+
+fzf_command = "fzf"
+fzf_args = ["--height", "90%"]
 
 main :: IO ()
 main = do
   rawtxt <- tryReadBib
-  bs <- pure $ parseExact pBib rawtxt
-  trace (show bs) (pure ())
+  bs <- parseExact pBib rawtxt
+  input_lines <- pure $ map prettyPrint bs
+
+  (Just hIn, Just hOut, _, ph) <-
+      createProcess (proc fzf_command fzf_args) { std_in = CreatePipe
+                                                , std_out = CreatePipe
+                                                , std_err = Inherit
+                                                , delegate_ctlc = True }
+
+  hSetBuffering hIn NoBuffering
+  mapM (hPutStrLn hIn) input_lines -- TODO - would be nicer to transition to streaming pipes
+  waitForProcess ph
+  output <- hGetLine hOut
+  hClose hOut
+  hClose hIn
+
+  target <- parseExact pOut (T.pack output)
+
+  basepath <- getEnv evPdfLoc
+  fullpath <- pure $ (basepath ++ "/" ++ T.unpack target ++ ".pdf")
+  putStrLn fullpath
+
   return ()
 
 -- TODO - add functionality for checking for bib entries without a pdf, and pdfs without bib entries
