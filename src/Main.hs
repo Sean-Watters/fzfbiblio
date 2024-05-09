@@ -10,9 +10,6 @@ import Data.Attoparsec.Text
 import System.Environment
 import System.Process
 import System.IO
-import System.IO.Error
-import GHC.IO.Handle
-import Debug.Trace
 
 ------------------------------------
 -- Environment variables
@@ -23,6 +20,15 @@ evBibLoc = "FZFBIBLIO_BIB_FILE"
 evPdfLoc :: String
 evPdfLoc = "FZFBIBLIO_PDF_FOLDER"
 
+evPdfViewer :: String
+evPdfViewer = "FZFBIBLIO_PDF_VIEWER"
+
+-- not environment vars, but maybe should be promoted to that?
+fzf_command :: String
+fzf_command = "fzf"
+
+fzf_args :: [String]
+fzf_args = ["--height", "90%"]
 ------------------------------------
 -- IO
 
@@ -31,6 +37,10 @@ tryReadBib = do
   path <- getEnv evBibLoc
   T.readFile path
 
+launchPdfViewer :: FilePath -> IO ()
+launchPdfViewer p = do
+  cmd <- getEnv evPdfViewer
+  callProcess cmd [p]
 
 
 ------------------------------------
@@ -165,8 +175,6 @@ parseExact p txt = case parseOnly (p <* skipSpace <* endOfInput) txt of
     Right bs -> pure bs
 
 
-fzf_command = "fzf"
-fzf_args = ["--height", "90%"]
 
 main :: IO ()
 main = do
@@ -181,7 +189,7 @@ main = do
                                                 , delegate_ctlc = True }
 
   hSetBuffering hIn NoBuffering
-  mapM (hPutStrLn hIn) input_lines -- TODO - would be nicer to transition to streaming pipes
+  mapM (hPutStrLn hIn) input_lines
   waitForProcess ph
   output <- hGetLine hOut
   hClose hOut
@@ -191,8 +199,10 @@ main = do
 
   basepath <- getEnv evPdfLoc
   fullpath <- pure $ (basepath ++ "/" ++ T.unpack target ++ ".pdf")
-  putStrLn fullpath
+
+  launchPdfViewer fullpath
 
   return ()
 
--- TODO - add functionality for checking for bib entries without a pdf, and pdfs without bib entries
+-- TODO - add functionality for checking which bib entries don't have a pdf,
+-- and which pdfs don't have bib entries
