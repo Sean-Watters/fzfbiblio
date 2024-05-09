@@ -52,7 +52,7 @@ extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
 common warnings
-    ghc-options: -Wall
+    ghc-options: -Wall -fno-warn-unused-do-bind
 
 executable fzfbiblio
     -- Import common warning flags.
