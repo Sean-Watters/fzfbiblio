@@ -60,9 +60,14 @@ pPair = do
   skipSpace
   char '='
   skipSpace
-  v <- pCurlySur (skipSpace *> takeTill (== '}') <* skipSpace)
+  v <- pCurlySur (skipSpace *> scan 0 f <* skipSpace)
   skipSpace
   pure (k , v)
+  where
+    f :: Int -> Char -> Maybe Int
+    f n c | c == '{' = Just (n + 1)
+          | c == '}' = if n == 0 then Nothing else Just (n - 1)
+          | otherwise = Just n
 
 pMaybe :: Parser a -> Parser (Maybe a)
 pMaybe p = do
@@ -131,7 +136,7 @@ pBibEntry = do
   return x
 
 pBib :: Parser [BibEntry]
-pBib = many (pBibEntry) <* skipSpace
+pBib = many pBibEntry
 
 ------------------------------------
 -- Main
