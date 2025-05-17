@@ -1,15 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Applicative
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
-import Data.Maybe
-import Data.Char
 import Data.Attoparsec.Text
 import System.Environment
 import System.Process
 import System.IO
+
+import Bib
 
 ------------------------------------
 -- Environment variables
@@ -43,136 +42,75 @@ launchPdfViewer p = do
   cmd <- getEnv evPdfViewer
   callProcess cmd [p]
 
-
-------------------------------------
--- Model
-
-data BibEntry = MkBibEntry {id :: T.Text, author :: T.Text, title :: T.Text}
-  deriving (Eq, Ord, Show)
-
-prettyPrint :: BibEntry -> String
-prettyPrint (MkBibEntry fId fAuthor fTitle) = T.unpack fTitle ++ " • " ++ T.unpack fAuthor ++ " • (" ++ T.unpack fId ++ ")"
-
-------------------------------------
--- Parsing
-isSpaceOrChar :: Char -> Char -> Bool
-isSpaceOrChar x c = isSpace c || c == x
-
-pCurlySur :: Parser a -> Parser a
-pCurlySur p = do
-  char '{'
-  skipSpace
-  a <- p
-  skipSpace
-  char '}'
-  return a
-
-pPair :: Parser (T.Text, T.Text)
-pPair = do
-  skipSpace
-  k <- takeTill (isSpaceOrChar '=')
-  skipSpace
-  char '='
-  skipSpace
-  v <- pCurlySur (skipSpace *> scan 0 f <* skipSpace)
-  skipSpace
-  pure (k , v)
-  where
-    f :: Int -> Char -> Maybe Int
-    f n c | c == '{' = Just (n + 1)
-          | c == '}' = if n == 0 then Nothing else Just (n - 1)
-          | otherwise = Just n
-
-pMaybe :: Parser a -> Parser (Maybe a)
-pMaybe p = do
-  mx <- eitherP p skipSpace
-  case mx of
-    Left x -> return $ Just x
-    Right () -> return $ Nothing
-
-pNothing :: Parser a -> Parser (Maybe b)
-pNothing p = do
-  _ <- p
-  pure Nothing
-
-pJust :: Parser a -> Parser (Maybe a)
-pJust p = do
-  x <- p
-  pure (Just x)
-
-pList' :: Parser a -> Parser [Maybe a]
-pList' p = do
-  mHead <- choice [pJust p, pNothing skipSpace]
-  mTail <- choice [(pNothing (char ',') *> pNothing skipSpace *> pJust (pList' p))
-                  , pNothing skipSpace]
-  mxs <- pure $ case mTail of
-    Nothing -> [ mHead ]
-    Just xs -> mHead : xs
-  pure mxs
-
-pList :: Parser a -> Parser [a]
-pList p = do
-  mxs <- pList' p
-  return $ catMaybes mxs
-
-pBibEntryData :: Parser BibEntry
-pBibEntryData = do
-  fId <- takeTill (isSpaceOrChar ',')
-  skipSpace
-  char ','
-  skipSpace
-  entries <- pList pPair
-  ----------
-  mAuthor <- return $ lookup "author" entries
-  mTitle <- return $ lookup "title" entries
-  fTitle <- case isJust mTitle of
-             True -> return $ fromJust mTitle
-             False -> fail "no title field"
-  fAuthor <- case isJust mAuthor of
-             True -> return $ fromJust mAuthor
-             False -> fail "no author field"
-  return $ MkBibEntry fId fAuthor fTitle
-
-pBibEntry :: Parser BibEntry
-pBibEntry = do
-  skipSpace
-  takeTill (isSpaceOrChar '{')
-  skipSpace
-  x <- (pCurlySur pBibEntryData)
-  skipSpace
-  return x
-
-pBib :: Parser [BibEntry]
-pBib = many pBibEntry
-
-pLast :: Parser T.Text
-pLast = do
-  char '('
-  x <- takeTill (== ')')
-  char ')'
-  endOfInput
-  return x
-
-pOut :: Parser T.Text
-pOut = do
-  skipWhile (/= '(')
-  x <- choice [pLast, pOut]
-  return x
-
-
-------------------------------------
--- Main
-
 parseExact :: Parser a -> T.Text -> IO a
 parseExact p txt = case parseOnly (p <* skipSpace <* endOfInput) txt of
     Left err -> ioError $ userError $ "Parse error: " ++ err
     Right bs -> pure bs
 
+readAndParseBib :: IO [BibEntry]
+readAndParseBib = do
+  rawtxt <- tryReadBib
+  parseExact pBib rawtxt
+
+
+
+
+------------------------------------
+-- Main
 
 main :: IO ()
 main = do
-  rawtxt <- tryReadBib
-  bs <- parseExact pBib rawtxt
+  args <- getArgs
+  run args
+
+run :: [String] -> IO ()
+run [] = runHelp
+run ("help" : _) = runHelp
+run ("config" : _) = runConfig
+run ("validate" : _) = do
+  bs <- readAndParseBib
+  runValidate bs
+run ("fzf" : _) = do
+  bs <- readAndParseBib
+  runFzf bs
+run (c : _) = putStrLn ("'" ++ c ++ "' is not a recognised command. Try 'fzfbiblio help'")
+
+-- Print the help string to terminal.
+runHelp :: IO ()
+runHelp = putStrLn $
+  "Available commands:\n\
+  \  fzfbiblio help --- display this help text.\n\
+  \  fzfbiblio config --- display the currently set config options.\n\
+  \  fzfbiblio validate --- report bib entries without matching pdf file, and vice-versa.\n\
+  \  fzfbiblio fzf --- invoke fzf to open a pdf file from the bib library.\n\
+  \\n\
+  \You must set the following environment variables, eg from your `.bashrc`:\n\
+  \  `$FZFBIBLIO_BIB_FILE`, eg to `$HOME/bib/global.bib`. This must point to a bibtex file.\n\
+  \  `$FZFBIBLIO_PDF_FOLDER`, eg to `$HOME/bib/pdf`\n\
+  \  `$FZFBIBLIO_PDF_VIEWER`, eg to `zathura`"
+
+
+-- Print the current config values and where they are sourced from (commandline, config file, env vars) to terminal
+runConfig :: IO ()
+runConfig = putStrLn "That feature is currently unimplemented, sorry!"
+
+-- Parse the bib file, and compare to the files in the pdf folder. Return a report of files without matching bib entries
+-- and vice-versa.
+runValidate :: [BibEntry] -> IO ()
+runValidate bs = do
+  pdfs <- _ -- get the list of pdf file names, and chop off the file extensions
+  (bs', pdfs') <- validate (sort bs) (sort pdfs) -- warning: sort may not behave as expected on BibEntry's!
+  putStrLn "The following bib entries do not have an accompanying pdf file:"
+  print bs'
+  putStrLn "The following pdf files do not have an accompanying bib entry:"
+  print pdfs'
+
+-- returns the orphan bibentries (left) and pdf files (right)
+validate :: [BibEntry] -> [String] -> ([String], [String])
+validate = undefined
+
+runFzf :: [BibEntry] -> IO ()
+runFzf bs = do
   input_lines <- pure $ map prettyPrint bs
 
   (Just hIn, Just hOut, _, ph) <-
@@ -180,15 +118,15 @@ main = do
                                                 , std_out = CreatePipe
                                                 , std_err = Inherit
                                                 , delegate_ctlc = True }
-
   hSetBuffering hIn NoBuffering
 
 -- if a significant delay becomes noticeable
--- at startup before the list becomes populated, and the bibfile also 
+-- at startup before the list becomes populated, and the bibfile also
 -- happens to be large, then it may be because of mapM loading the whole
--- bib into memory before processing it. At that point, a streaming approach 
--- using the pipes library would be better.
-  mapM (hPutStrLn hIn) input_lines 
+-- bib into memory before processing it. At that point, a streaming approach
+-- using the pipes library would be better. Or, the bottleneck may be the
+-- parser.
+  mapM (hPutStrLn hIn) input_lines
   waitForProcess ph
 
   output <- hGetLine hOut
@@ -203,6 +141,3 @@ main = do
   launchPdfViewer fullpath
 
   return ()
-
--- TODO - add functionality for checking which bib entries don't have a pdf,
--- and which pdfs don't have bib entries

@@ -14,7 +14,7 @@ synopsis: A small fzf-based front end for a bibtex pdf collection.
 description: This script provides one part of a simple bibliography management system based on bibtex. If you maintain one global `.bib` file for the metatdata, and name your pdf files the same as your bibtex entries, then you can use this script to search for and open those documents via `fzf`.
 
 author:             Sean Watters
-maintainer:         seanwatters11@gmail.com
+maintainer:         sean.watters@strath.ac.uk
 copyright:          c. Sean Watters, 2024.
 license:            MIT
 license-file:       LICENSE
@@ -25,7 +25,8 @@ extra-doc-files:    README.md
 
 executable fzfbiblio
     main-is:          Main.hs
-    build-depends:    base ^>=4.17.2.1, text, attoparsec, process
+    other-modules:    Bib
+    build-depends:    base >=4.17.2.1, text, attoparsec, process
     ghc-options: -Wall -fno-warn-unused-do-bind -O2
     hs-source-dirs:   src
     default-language: Haskell2010
