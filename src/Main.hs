@@ -1,14 +1,17 @@
-{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import qualified Data.Text as T
-import qualified Data.Text.IO as T
-import Data.Attoparsec.Text
+import Control.Monad
+import Control.Monad.Trans
+import Control.Monad.Except
 import System.Environment
 import System.Process
 import System.IO
+import System.FilePath
+import System.Directory
 
 import Bib
+import System.FilePath (dropExtension)
+import GHC.IO.SubSystem (withIoSubSystem)
 
 ------------------------------------
 -- Environment variables
@@ -29,31 +32,26 @@ fzf_command = "fzf"
 fzf_args :: [String]
 fzf_args = ["--height", "90%"]
 
+-- TODO: can set env vars for the scope of this process. may be an easy way to incorporate config values without
+-- changing code
+
 ------------------------------------
 -- IO
-
-tryReadBib :: IO T.Text
-tryReadBib = do
-  path <- getEnv evBibLoc
-  T.readFile path
 
 launchPdfViewer :: FilePath -> IO ()
 launchPdfViewer p = do
   cmd <- getEnv evPdfViewer
   callProcess cmd [p]
 
-parseExact :: Parser a -> T.Text -> IO a
-parseExact p txt = case parseOnly (p <* skipSpace <* endOfInput) txt of
-    Left err -> ioError $ userError $ "Parse error: " ++ err
-    Right bs -> pure bs
+runBibParser :: BibM [BibEntry]
+runBibParser = do
+  path <- liftIO $ getEnv evBibLoc
+  parseBib path
 
-readAndParseBib :: IO [BibEntry]
-readAndParseBib = do
-  rawtxt <- tryReadBib
-  parseExact pBib rawtxt
+------------------------------------
+-- Output Parsing
 
-
-
+--
 
 ------------------------------------
 -- Main
@@ -61,19 +59,22 @@ readAndParseBib = do
 main :: IO ()
 main = do
   args <- getArgs
-  run args
+  runExceptT $ run args
+  return ()
 
-run :: [String] -> IO ()
-run [] = runHelp
-run ("help" : _) = runHelp
-run ("config" : _) = runConfig
+run :: [String] -> BibM ()
+run [] = liftIO runHelp
+run ("help" : _) = liftIO runHelp
+run ("config" : _) = liftIO runConfig
 run ("validate" : _) = do
-  bs <- readAndParseBib
-  runValidate bs
+  bs <- runBibParser
+  liftIO $ runValidate bs
+  return ()
 run ("fzf" : _) = do
-  bs <- readAndParseBib
-  runFzf bs
-run (c : _) = putStrLn ("'" ++ c ++ "' is not a recognised command. Try 'fzfbiblio help'")
+  bs <- runBibParser
+  liftIO $ runFzf bs
+  return ()
+run (c : _) = liftIO $ putStrLn ("'" ++ c ++ "' is not a recognised command. Try 'fzfbiblio help'")
 
 -- Print the help string to terminal.
 runHelp :: IO ()
@@ -98,21 +99,36 @@ runConfig = putStrLn "That feature is currently unimplemented, sorry!"
 -- and vice-versa.
 runValidate :: [BibEntry] -> IO ()
 runValidate bs = do
-  pdfs <- _ -- get the list of pdf file names, and chop off the file extensions
-  (bs', pdfs') <- validate (sort bs) (sort pdfs) -- warning: sort may not behave as expected on BibEntry's!
-  putStrLn "The following bib entries do not have an accompanying pdf file:"
+  -- get the list of pdf files in the pdfs directory, sans file extension
+  pdfFolder <- getEnv evPdfLoc
+  files <- listDirectory pdfFolder
+  let pdfs = map dropExtension $ filter (\ z -> takeExtension z == ".pdf") files
+  (bs', pdfs') <- pure $ validate (map Bib.identifier bs) pdfs
+  putStrLn "The following bib entries do not have an accompanying pdf file:\n"
   print bs'
-  putStrLn "The following pdf files do not have an accompanying bib entry:"
+  putStrLn "\nThe following pdf files do not have an accompanying bib entry:\n"
   print pdfs'
 
 -- returns the orphan bibentries (left) and pdf files (right)
-validate :: [BibEntry] -> [String] -> ([String], [String])
-validate = undefined
+-- speed is unlikely to be an issue, but if so can rewrite this to only do 1 traversal
+validate :: [String] -> [String] -> ([String], [String])
+validate bs ps = let bs' = filter (`elem` ps) bs
+                     ps' = filter (`elem` bs) ps
+                 in (bs', ps')
+
+openPdfFile :: String -> BibM ()
+openPdfFile res = do
+  target <- parseResult res
+  basepath <- liftIO $ getEnv evPdfLoc
+  let fullpath = basepath ++ "/" ++ target ++ ".pdf"
+  liftIO $ launchPdfViewer fullpath
+  return ()
 
 runFzf :: [BibEntry] -> IO ()
 runFzf bs = do
-  input_lines <- pure $ map prettyPrint bs
+  let input_lines = map prettyPrint bs
 
+  -- fork an fzf process and keep IO handles
   (Just hIn, Just hOut, _, ph) <-
       createProcess (proc fzf_command fzf_args) { std_in = CreatePipe
                                                 , std_out = CreatePipe
@@ -120,12 +136,11 @@ runFzf bs = do
                                                 , delegate_ctlc = True }
   hSetBuffering hIn NoBuffering
 
--- if a significant delay becomes noticeable
--- at startup before the list becomes populated, and the bibfile also
--- happens to be large, then it may be because of mapM loading the whole
--- bib into memory before processing it. At that point, a streaming approach
--- using the pipes library would be better. Or, the bottleneck may be the
--- parser.
+-- Send the lines to the fzf process over the handle.
+-- NB: mapM has load the whole bib into memory before processing it.
+-- If a significant delay becomes noticeable at startup before the list
+-- becomes populated, a streaming approach using the pipes library may be
+-- better. Or, the bottleneck may be the parser.
   mapM (hPutStrLn hIn) input_lines
   waitForProcess ph
 
@@ -133,11 +148,5 @@ runFzf bs = do
   hClose hOut
   hClose hIn
 
-  target <- parseExact pOut (T.pack output)
-
-  basepath <- getEnv evPdfLoc
-  fullpath <- pure $ (basepath ++ "/" ++ T.unpack target ++ ".pdf")
-
-  launchPdfViewer fullpath
-
+  runExceptT $ openPdfFile output
   return ()
